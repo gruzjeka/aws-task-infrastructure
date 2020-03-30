@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  Environment:
+    Description: Select Dev, QA, Prod environment.
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - QA
+      - Prod
+
+Resources:
+  DynamoDBBookTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "ISBN"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "ISBN"
+          KeyType: "HASH"
+      TableName: !Join
+        - _
+        - - !Ref Environment
+          - Books
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  SQSBookQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Join
+        - _
+        - - !Ref Environment
+          - Books
