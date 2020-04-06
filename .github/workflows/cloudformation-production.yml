@@ -2,7 +2,7 @@ name: AWS Cloudformation stack
 
 on:
   push:
-    branches: [ master ]
+    branches: [ production ]
 
 jobs:
   deploy-to-production:
