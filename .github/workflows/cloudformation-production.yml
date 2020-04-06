@@ -5,7 +5,7 @@ on:
     branches: [ master ]
 
 jobs:
-  deploy:
+  deploy-to-production:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -19,4 +19,4 @@ jobs:
         aws-region: us-east-1
     
     - name: Deploy cloudformation to production
-      run: aws cloudformation deploy --template-file ./template.yml --stack-name production-books --parameter-overrides environment=production
+      run: aws cloudformation deploy --template-file ./template.yaml --stack-name production-books --parameter-overrides environment=production
