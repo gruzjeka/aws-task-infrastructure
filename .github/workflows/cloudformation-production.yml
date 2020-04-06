@@ -1,11 +1,11 @@
-name: AWS Cloudformation stack
+name: AWS Cloudformation production stack
 
 on:
   push:
     branches: [ production ]
 
 jobs:
-  deploy-to-production:
+  deploy:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
