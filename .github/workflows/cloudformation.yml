@@ -18,5 +18,5 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1
     
-    - name: Copy files to S3 with the AWS CLI
+    - name: Deploy cloudformation to production
       run: aws cloudformation deploy --template-file ./template.yml --stack-name production-books --parameter-overrides environment=production
