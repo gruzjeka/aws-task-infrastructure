@@ -14,17 +14,17 @@ Resources:
   BookSQSQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Join ["-", [!Ref "Environment", "books"]]
+      QueueName: !Join ["-", [!Ref Environment, "books"]]
       Tags:
         - Key: Environment
           Value: !Ref Environment
         - Key: Application
           Value: BooksApp
 
-  BookS3Bucket:
+  BookS3BackupBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Join ["-", [!Ref "Environment", "gruzjeka-books"]]
+      BucketName: !Join ["-", [!Ref Environment, "gruzjeka-books"]]
       AccessControl: Private
       Tags:
         - Key: Environment
@@ -41,13 +41,93 @@ Resources:
       KeySchema:
         - AttributeName: "ISBN"
           KeyType: "HASH"
-      TableName: !Join ["-", [!Ref "Environment", "books"]]
+      TableName: !Join ["-", [!Ref Environment, "books"]]
       BillingMode: PAY_PER_REQUEST
       Tags:
         - Key: Environment
           Value: !Ref Environment
 
-  LambdaExecutionRole:
+  BookSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow ssh and http:80"
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 22
+          IpProtocol: tcp
+          ToPort: 22
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+
+  BookDeploymentS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Join ["-", [!Ref Environment, "gruzjeka-books-artifacts"]]
+      AccessControl: Private
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: BooksApp
+
+  BookVMExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: allowS3Read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - arn:aws:s3:::aws-codedeploy-us-east-1/*
+                  - !GetAtt BookDeploymentS3Bucket.Arn
+
+  ListS3BucketsInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /
+      Roles:
+        - !Ref BookVMExecutionRole
+
+  BookVM:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: ami-01fbc92d24852df9b
+      InstanceType: t2.micro
+      KeyName: gruzjeka_key
+      SecurityGroupIds: [!Ref BookSecurityGroup]
+      IamInstanceProfile: !Ref ListS3BucketsInstanceProfile
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -x
+          yum -y update
+          yum install -y ruby
+          cd /home/ec2-user
+          curl -O https://aws-codedeploy-us-east-1.s3.amazonaws.com/latest/install
+          chmod +x ./install
+          ./install auto
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: BooksApp
+
+  BooksSQSToS3BackupFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -85,45 +165,85 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
-                  - s3:PutObject
-                Resource: !GetAtt BookS3Bucket.Arn
+                  - s3:GetObject*
+                  - s3:GetBucket*
+                  - s3:List*
+                  - s3:DeleteObject*
+                  - s3:PutObject*
+                  - s3:Abort*
+                Resource: !Join ["", [!GetAtt BookS3BackupBucket.Arn, "/*"]]
 
-  BookLambdaFunction:
+  BooksSQSToS3BackupFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: "s3://gruzjeka-test-bucket/publish.zip"
-      Handler: MyFunction.FunctionHandler
+      FunctionName: BooksSQSToS3BackupFunction
+      CodeUri: "s3://gruzjeka-books-defaults/default-lambda.zip"
+      Handler: S3Backup::S3Backup.SqsToS3BackupFunction::FunctionHandler
       Runtime: dotnetcore2.1
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Events:
-        MySQSEvent:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt BookSQSQueue.Arn
-            BatchSize: 10
+      Role: !GetAtt BooksSQSToS3BackupFunctionExecutionRole.Arn
+      Timeout: 30
+      Environment:
+        Variables:
+          BackupS3BucketName: !Ref BookS3BackupBucket
+          Region: !Ref "AWS::Region"
 
-  BookSecurityGroup:
-    Type: "AWS::EC2::SecurityGroup"
+  BooksSQSToS3BackupFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
     Properties:
-      GroupDescription: "Allow ssh and http:80"
-      SecurityGroupIngress:
-        - CidrIp: "0.0.0.0/0"
-          FromPort: 22
-          IpProtocol: tcp
-          ToPort: 22
-        - CidrIp: "0.0.0.0/0"
-          FromPort: 80
-          IpProtocol: tcp
-          ToPort: 80
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt BookSQSQueue.Arn
+      FunctionName: !GetAtt BooksSQSToS3BackupFunction.Arn
 
-  BookVM:
-    Type: "AWS::EC2::Instance"
+  CodeDeployRole:
+    Type: AWS::IAM::Role
     Properties:
-      ImageId: ami-07ebfd5b3428b6f4d
-      InstanceType: t2.micro
-      KeyName: gruzjeka_key
-      SecurityGroupIds: [!Ref BookSecurityGroup]
-      UserData:
-        "Fn::Base64": !Sub |
-          #!/bin/bash -x
-          echo 'hello world'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codedeploy.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+
+  BookLambdaDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: lambda-books
+      ComputePlatform: Lambda
+
+  BookLambdaDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref BookLambdaDeployApplication
+      DeploymentGroupName: !Ref Environment
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentStyle:
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+        DeploymentType: BLUE_GREEN
+
+  BookEC2DeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: ec2-books
+      ComputePlatform: Server
+
+  BookVMDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref BookEC2DeployApplication
+      DeploymentGroupName: !Ref Environment
+      Ec2TagFilters:
+        - Key: Environment
+          Value: !Ref Environment
+          Type: "KEY_AND_VALUE"
+        - Key: Application
+          Value: BooksApp
+          Type: "KEY_AND_VALUE"
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
