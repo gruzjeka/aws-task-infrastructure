@@ -4,7 +4,6 @@ Parameters:
   Environment:
     Description: Select environment.
     Type: String
-    Default: dev
     AllowedValues:
       - development
       - staging
